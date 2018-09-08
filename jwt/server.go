@@ -9,26 +9,77 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// User defines user information
+type User struct {
+	Name     string
+	Password string
+	Role     string
+	Token    string
+}
+
+// SdtClaims defines the custom claims
+type SdtClaims struct {
+	Name string `json:"name"`
+	Role string `json:"role"`
+	jwt_lib.StandardClaims
+}
+
 var (
 	superSecretPassword = "raycad"
 )
 
-type SdtClaims struct {
-	Name  string `json:"name"`
-	Scope string `json:"scope"`
-	jwt_lib.StandardClaims
+var userList []User
+
+func initData() {
+	userList = []User{}
+	userList = append(userList,
+		User{Name: "admin", Password: "admin", Role: "ADMIN, MODERATOR", Token: ""},
+		User{Name: "raycad", Password: "123", Role: "MODERATOR", Token: ""},
+		User{Name: "seedotech", Password: "123456", Role: "USER", Token: ""})
+}
+
+func getUserByAccount(name string, password string) (*User, int) {
+	for i, user := range userList {
+		if user.Name == name && user.Password == password {
+			return &user, i
+		}
+	}
+
+	return nil, -1
+}
+
+func getUserByToken(token string) *User {
+	for _, user := range userList {
+		if user.Token == token {
+			return &user
+		}
+	}
+
+	return nil
 }
 
 func main() {
 	r := gin.Default()
+
+	// Initialize data
+	initData()
+
 	login := r.Group("/login")
 	login.POST("/", func(c *gin.Context) {
 		name := c.PostForm("name")
-		scope := "ROLE_ADMIN, ROLE_MODERATOR"
+		password := c.PostForm("password")
+
+		user, i := getUserByAccount(name, password)
+		if user == nil {
+			c.JSON(401, gin.H{"message": "Wrong user information!"})
+			return
+		}
+
+		log.Println("name = " + name)
 
 		claims := SdtClaims{
-			name,
-			scope,
+			user.Name,
+			user.Role,
 			jwt_lib.StandardClaims{
 				ExpiresAt: time.Now().Add(time.Hour * 1).Unix(),
 				Issuer:    "seedotech",
@@ -43,6 +94,9 @@ func main() {
 			return
 		}
 
+		// Update new token string
+		userList[i].Token = tokenString
+
 		c.JSON(200, gin.H{"token": tokenString})
 	})
 
@@ -51,14 +105,26 @@ func main() {
 
 	apiV1.GET("/listContact", func(c *gin.Context) {
 		tokenString := c.Request.Header.Get("Authorization")
-		claims := SdtClaims{}
+
+		user := getUserByToken(tokenString)
+		if user == nil {
+			c.JSON(401, gin.H{"message": "Wrong token"})
+			return
+		}
+
+		if user.Name == "admin" {
+			c.JSON(200, gin.H{"message": "Hello " + user.Name + "! You are admin user"})
+		} else {
+			c.JSON(200, gin.H{"message": "Hello " + user.Name + "! You are normal user"})
+		}
+		/*claims := SdtClaims{}
 		token, err := jwt_lib.ParseWithClaims(tokenString, &claims, func(token *jwt_lib.Token) (interface{}, error) {
 			return []byte(superSecretPassword), nil
 		})
 
-		if token.Valid == true || err != nil {
+		log.Println("Name "+claims.Name, token.Valid, err)
+		if token.Valid == false || err != nil {
 			c.JSON(401, gin.H{"message": "Wrong token"})
-			log.Println(token.Valid, err)
 			return
 		}
 
@@ -66,8 +132,8 @@ func main() {
 			c.JSON(200, gin.H{"message": "Hello " + claims.Name + "! You have permisson!"})
 		} else {
 			c.JSON(401, gin.H{"message": "Sorry " + claims.Name + "! You don't have permisson!"})
-		}
+		}*/
 	})
 
-	r.Run("127.0.0.1:9000")
+	r.Run(":9000")
 }
