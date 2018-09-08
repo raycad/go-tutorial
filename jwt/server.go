@@ -2,6 +2,8 @@ package main
 
 import (
 	"log"
+	"net/http"
+	"runtime"
 	"time"
 
 	jwt_lib "github.com/dgrijalva/jwt-go"
@@ -24,6 +26,13 @@ type SdtClaims struct {
 	jwt_lib.StandardClaims
 }
 
+// ProcessedMessage defines the message information after processing
+type ProcessedMessage struct {
+	Code    int
+	Name    string
+	Message gin.H
+}
+
 var (
 	superSecretPassword = "raycad"
 )
@@ -31,6 +40,12 @@ var (
 var userList []User
 
 func initData() {
+	log.Printf(">>>> GOMAXPROCS is %d\n", runtime.GOMAXPROCS(0))
+	cpus := runtime.NumCPU()
+	runtime.GOMAXPROCS(cpus)
+	log.Printf(">>>> cpus = %d\n", cpus)
+	log.Printf(">>>> GOMAXPROCS is %d\n", runtime.GOMAXPROCS(0))
+
 	userList = []User{}
 	userList = append(userList,
 		User{Name: "admin", Password: "admin", Role: "ADMIN, MODERATOR", Token: ""},
@@ -71,11 +86,11 @@ func main() {
 
 		user, i := getUserByAccount(name, password)
 		if user == nil {
-			c.JSON(401, gin.H{"message": "Wrong user information!"})
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "Wrong user information!"})
 			return
 		}
 
-		log.Println("name = " + name)
+		log.Printf("name = %s\n", name)
 
 		claims := SdtClaims{
 			user.Name,
@@ -90,48 +105,78 @@ func main() {
 		tokenString, err := token.SignedString([]byte(superSecretPassword))
 
 		if err != nil {
-			c.JSON(500, gin.H{"message": "Could not generate token"})
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Could not generate token"})
 			return
 		}
 
 		// Update new token string
 		userList[i].Token = tokenString
 
-		c.JSON(200, gin.H{"token": tokenString})
+		c.JSON(http.StatusOK, gin.H{"token": tokenString})
 	})
 
-	apiV1 := r.Group("api/v1")
+	apiV1 := r.Group("api/v1.0")
 	apiV1.Use(jwt.Auth(superSecretPassword))
 
 	apiV1.GET("/listContact", func(c *gin.Context) {
+		// Create copy to be used inside the goroutine
+		cCp := c.Copy()
+		result := make(chan ProcessedMessage)
+		go func() {
+			// time.Sleep(1 * time.Second)
+			tokenString := cCp.Request.Header.Get("Authorization")
+
+			user := getUserByToken(tokenString)
+			if user == nil {
+				result <- ProcessedMessage{http.StatusUnauthorized, user.Name, gin.H{"message": "Wrong token"}}
+				return
+			}
+
+			if user.Name == "admin" {
+				result <- ProcessedMessage{http.StatusOK, user.Name, gin.H{"message": "Hello " + user.Name + "! You are admin user"}}
+			} else {
+				result <- ProcessedMessage{http.StatusOK, user.Name, gin.H{"message": "Hello " + user.Name + "! You are normal user"}}
+			}
+		}()
+
+		pm := ProcessedMessage(<-result)
+		c.JSON(pm.Code, pm.Message)
+		log.Println("1. Processed user = " + pm.Name)
+		// log.Printf("2. Processed user = %s\n", pm.Name)
+
+		/*// It's slower when benchmarking without using goroutines
+		// log.Printf is slower than log.Println
 		tokenString := c.Request.Header.Get("Authorization")
 
 		user := getUserByToken(tokenString)
 		if user == nil {
-			c.JSON(401, gin.H{"message": "Wrong token"})
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "Wrong token"})
 			return
 		}
 
 		if user.Name == "admin" {
-			c.JSON(200, gin.H{"message": "Hello " + user.Name + "! You are admin user"})
+			c.JSON(http.StatusOK, gin.H{"message": "Hello " + user.Name + "! You are admin user"})
 		} else {
-			c.JSON(200, gin.H{"message": "Hello " + user.Name + "! You are normal user"})
+			c.JSON(http.StatusOK, gin.H{"message": "Hello " + user.Name + "! You are normal user"})
 		}
+		log.Println("2. Processed user = " + user.Name)
+		// log.Printf("2. Processed user = %s", user.Name)*/
+
 		/*claims := SdtClaims{}
 		token, err := jwt_lib.ParseWithClaims(tokenString, &claims, func(token *jwt_lib.Token) (interface{}, error) {
 			return []byte(superSecretPassword), nil
 		})
 
-		log.Println("Name "+claims.Name, token.Valid, err)
+		log.Printf("Name %s, %d, %s", claims.Name, token.Valid, err)
 		if token.Valid == false || err != nil {
-			c.JSON(401, gin.H{"message": "Wrong token"})
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "Wrong token"})
 			return
 		}
 
 		if claims.Name == "raycad" {
-			c.JSON(200, gin.H{"message": "Hello " + claims.Name + "! You have permisson!"})
+			c.JSON(http.StatusOK, gin.H{"message": "Hello " + claims.Name + "! You have permisson!"})
 		} else {
-			c.JSON(401, gin.H{"message": "Sorry " + claims.Name + "! You don't have permisson!"})
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "Sorry " + claims.Name + "! You don't have permisson!"})
 		}*/
 	})
 
